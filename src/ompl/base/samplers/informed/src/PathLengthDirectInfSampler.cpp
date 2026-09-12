@@ -57,7 +57,7 @@ namespace ompl
         // The direct ellipsoid sampling class for path-length:
         PathLengthDirectInfSampler::PathLengthDirectInfSampler(const ProblemDefinitionPtr &probDefn,
                                                                unsigned int maxNumberCalls)
-          : InformedSampler(probDefn, maxNumberCalls), informedIdx_(0u), uninformedIdx_(0u)
+          : InformedSampler(probDefn, maxNumberCalls)
         {
             // Variables
             // The number of start states
@@ -90,123 +90,63 @@ namespace ompl
                                 "the informed sampler is created.");
             }
 
-            // Check that the provided statespace is compatible and extract the necessary indices.
-            // The statespace must either be R^n or SE(2) or SE(3).
-            // If it is UNKNOWN, warn and treat it as R^n
-            if (!InformedSampler::space_->isCompound())
+            // Recursively identify RealVector (informed) and SO(2)/SO(3) (uninformed) leaf subspaces. This supports
+            // both typed compounds (SE2/SE3/Dubins/Reeds-Shepp) and nested compounds such as Compound(SE2, RealVector).
+            std::vector<std::size_t> chain;
+            collectSpaceLeaves(InformedSampler::space_, chain);
+
+            if (informedLeaves_.empty())
             {
-                if (InformedSampler::space_->getType() == STATE_SPACE_REAL_VECTOR)
+                throw Exception("PathLengthDirectInfSampler: No RealVector subspace found for informed sampling.");
+            }
+
+            // Build the Euclidean informed subspace used by the PHS.
+            if (informedLeaves_.size() == 1u)
+            {
+                informedSubSpace_ = informedLeaves_.front().space;
+                if (informedSubSpace_->getType() == STATE_SPACE_UNKNOWN)
                 {
-                    // R^n, this is easy
-                    informedIdx_ = 0u;
-                    uninformedIdx_ = 0u;
-                }
-                else if (InformedSampler::space_->getType() == STATE_SPACE_UNKNOWN)
-                {
-                    // Unknown, this is annoying. I hope the user knows what they're doing
                     OMPL_WARN("PathLengthDirectInfSampler: Treating the StateSpace of type \"STATE_SPACE_UNKNOWN\" as "
                               "type \"STATE_SPACE_REAL_VECTOR\".");
-                    informedIdx_ = 0u;
-                    uninformedIdx_ = 0u;
-                }
-                else
-                {
-                    throw Exception("PathLengthDirectInfSampler only supports Unknown, RealVector, SE2, and SE3 "
-                                    "StateSpaces.");
                 }
             }
-            else if (InformedSampler::space_->isCompound())
+            else
             {
-                // Variable:
-                // An ease of use upcasted pointer to the space as a compound space
-                const CompoundStateSpace *compoundSpace = InformedSampler::space_->as<CompoundStateSpace>();
+                unsigned int informedDim = 0u;
+                for (const auto &leaf : informedLeaves_)
+                    informedDim += leaf.space->getDimension();
 
-                // Check that the given space is SE2, SE3, Dubins, or Reeds-Shepp.
-                if (InformedSampler::space_->getType() == STATE_SPACE_SE2 ||
-                    InformedSampler::space_->getType() == STATE_SPACE_SE3 ||
-                    InformedSampler::space_->getType() == STATE_SPACE_DUBINS ||
-                    InformedSampler::space_->getType() == STATE_SPACE_REEDS_SHEPP)
+                auto informedRV = std::make_shared<RealVectorStateSpace>(informedDim);
+                RealVectorBounds bounds(informedDim);
+                unsigned int idx = 0u;
+                for (const auto &leaf : informedLeaves_)
                 {
-                    // Sanity check
-                    if (compoundSpace->getSubspaceCount() != 2u)
+                    if (leaf.space->getType() != STATE_SPACE_REAL_VECTOR)
                     {
-                        // Pout
-                        throw Exception("The provided compound state space does not have exactly 2 subspaces.");
+                        throw Exception("PathLengthDirectInfSampler: Concatenating non-RealVector informed leaves is "
+                                        "not supported.");
                     }
-
-                    // Iterate over the state spaces, finding the real vector and SO components.
-                    for (unsigned int idx = 0u;
-                         idx < InformedSampler::space_->as<CompoundStateSpace>()->getSubspaceCount(); ++idx)
+                    const auto &leafBounds = leaf.space->as<RealVectorStateSpace>()->getBounds();
+                    for (unsigned int i = 0u; i < leaf.space->getDimension(); ++i, ++idx)
                     {
-                        // Check if the space is real-vectored, SO2 or SO3
-                        if (compoundSpace->getSubspace(idx)->getType() == STATE_SPACE_REAL_VECTOR)
-                        {
-                            informedIdx_ = idx;
-                        }
-                        else if (compoundSpace->getSubspace(idx)->getType() == STATE_SPACE_SO2)
-                        {
-                            uninformedIdx_ = idx;
-                        }
-                        else if (compoundSpace->getSubspace(idx)->getType() == STATE_SPACE_SO3)
-                        {
-                            uninformedIdx_ = idx;
-                        }
-                        else
-                        {
-                            // Pout
-                            throw Exception("The provided compound state space contains a subspace (" +
-                                            std::to_string(idx) + ") that is not R^N, SO(2), or SO(3): " +
-                                            std::to_string(compoundSpace->getSubspace(idx)->getType()));
-                        }
+                        bounds.setLow(idx, leafBounds.low[i]);
+                        bounds.setHigh(idx, leafBounds.high[i]);
                     }
                 }
-                else
-                {
-                    // Case where we have a compound state space with only one subspace, and said subspace being R^N
-                    if (compoundSpace->getSubspaceCount() == 1u &&
-                        compoundSpace->getSubspace(0)->getType() == STATE_SPACE_REAL_VECTOR)
-                    {
-                        informedIdx_ = 0u;
-                        uninformedIdx_ = 0u;
-                    }
-                    else
-                    {
-                        throw Exception("PathLengthDirectInfSampler only supports RealVector, SE2, SE3, Dubins, and "
-                                        "ReedsShepp state spaces. Provided compound state space of type: " +
-                                        std::to_string(InformedSampler::space_->getType()) + " with " +
-                                        std::to_string(compoundSpace->getSubspaceCount()) + " subspaces.");
-                    }
-                }
+                informedRV->setBounds(bounds);
+                informedSubSpace_ = informedRV;
+            }
+
+            // Combined measure of uninformed leaves (SO2/SO3), used when reporting the informed measure.
+            uninformedMeasure_ = 1.0;
+            for (auto &leaf : uninformedLeaves_)
+            {
+                leaf.sampler = leaf.space->allocDefaultStateSampler();
+                uninformedMeasure_ *= leaf.space->getMeasure();
             }
 
             // Create a sampler for the whole space that we can use if we have no information
             baseSampler_ = InformedSampler::space_->allocDefaultStateSampler();
-
-            // Check if the space is compound
-            if (!InformedSampler::space_->isCompound())
-            {
-                // It is not.
-
-                // The informed subspace is the full space
-                informedSubSpace_ = InformedSampler::space_;
-
-                // And the uniformed subspace and its associated sampler are null
-                uninformedSubSpace_ = StateSpacePtr();
-                uninformedSubSampler_ = StateSamplerPtr();
-            }
-            else
-            {
-                // It is
-
-                // Get a pointer to the informed subspace...
-                informedSubSpace_ = InformedSampler::space_->as<CompoundStateSpace>()->getSubspace(informedIdx_);
-
-                // And the uninformed subspace is the remainder.
-                uninformedSubSpace_ = InformedSampler::space_->as<CompoundStateSpace>()->getSubspace(uninformedIdx_);
-
-                // Create a sampler for the uniformed subset:
-                uninformedSubSampler_ = uninformedSubSpace_->allocDefaultStateSampler();
-            }
 
             // Store the foci, first the starts:
             for (unsigned int i = 0u; i < numStarts; ++i)
@@ -332,10 +272,10 @@ namespace ompl
                 // No else, this value is better than this ellipse. It will get removed later.
             }
 
-            // And if the space is compound, further multiplied by the measure of the uniformed subspace
-            if (InformedSampler::space_->isCompound())
+            // And further multiplied by the measure of the uninformed subspaces (SO2/SO3 leaves)
+            if (!uninformedLeaves_.empty())
             {
-                informedMeasure = informedMeasure * uninformedSubSpace_->getMeasure();
+                informedMeasure = informedMeasure * uninformedMeasure_;
             }
 
             // Return the smaller of the two measures
@@ -479,18 +419,14 @@ namespace ompl
 
         std::vector<double> PathLengthDirectInfSampler::getInformedSubstate(const State *statePtr) const
         {
-            // Variable
-            // The raw data in the state
-            std::vector<double> rawData(informedSubSpace_->getDimension());
+            std::vector<double> rawData;
+            rawData.reserve(informedSubSpace_->getDimension());
 
-            // Get the raw data
-            if (!InformedSampler::space_->isCompound())
+            for (const auto &leaf : informedLeaves_)
             {
-                informedSubSpace_->copyToReals(rawData, statePtr);
-            }
-            else
-            {
-                informedSubSpace_->copyToReals(rawData, statePtr->as<CompoundState>()->components[informedIdx_]);
+                std::vector<double> leafData(leaf.space->getDimension());
+                leaf.space->copyToReals(leafData, getSubstate(statePtr, leaf.chain));
+                rawData.insert(rawData.end(), leafData.begin(), leafData.end());
             }
 
             return rawData;
@@ -498,35 +434,79 @@ namespace ompl
 
         void PathLengthDirectInfSampler::createFullState(State *statePtr, const std::vector<double> &informedVector)
         {
-            // If there is an extra "uninformed" subspace, we need to add that to the state before converting the raw
-            // vector representation into a state....
-            if (!InformedSampler::space_->isCompound())
+            // Write the informed Euclidean sample into each RealVector leaf.
+            unsigned int offset = 0u;
+            for (const auto &leaf : informedLeaves_)
             {
-                // No, space_ == informedSubSpace_
-                // Copy into the state pointer
-                informedSubSpace_->copyFromReals(statePtr, informedVector);
+                const unsigned int dim = leaf.space->getDimension();
+                std::vector<double> leafData(informedVector.begin() + static_cast<std::ptrdiff_t>(offset),
+                                             informedVector.begin() + static_cast<std::ptrdiff_t>(offset + dim));
+                leaf.space->copyFromReals(getSubstate(statePtr, leaf.chain), leafData);
+                offset += dim;
             }
-            else
+
+            // Uniformly sample each uninformed (SO2/SO3) leaf.
+            for (const auto &leaf : uninformedLeaves_)
+                leaf.sampler->sampleUniform(getSubstate(statePtr, leaf.chain));
+        }
+
+        void PathLengthDirectInfSampler::collectSpaceLeaves(const StateSpacePtr &space, std::vector<std::size_t> &chain)
+        {
+            if (!space->isCompound())
             {
-                // Yes, we need to also sample the uninformed subspace
-                // Variables
-                // A state for the uninformed subspace
-                State *uninformedState = uninformedSubSpace_->allocState();
+                SubspaceLeaf leaf;
+                leaf.chain = chain;
+                leaf.space = space;
 
-                // Copy the informed subspace into the state pointer
-                informedSubSpace_->copyFromReals(statePtr->as<CompoundState>()->components[informedIdx_],
-                                                 informedVector);
-
-                // Sample the uniformed subspace
-                uninformedSubSampler_->sampleUniform(uninformedState);
-
-                // Copy the informed subspace into the state pointer
-                uninformedSubSpace_->copyState(statePtr->as<CompoundState>()->components[uninformedIdx_],
-                                               uninformedState);
-
-                // Free the state
-                uninformedSubSpace_->freeState(uninformedState);
+                if (space->getType() == STATE_SPACE_REAL_VECTOR || space->getType() == STATE_SPACE_UNKNOWN)
+                {
+                    informedLeaves_.push_back(leaf);
+                }
+                else if (space->getType() == STATE_SPACE_SO2 || space->getType() == STATE_SPACE_SO3)
+                {
+                    uninformedLeaves_.push_back(leaf);
+                }
+                else
+                {
+                    throw Exception("PathLengthDirectInfSampler only supports RealVector, SE2, SE3, Dubins, "
+                                    "ReedsShepp, and compound combinations of those spaces. Unsupported subspace "
+                                    "type: " +
+                                    std::to_string(space->getType()));
+                }
+                return;
             }
+
+            const int type = space->getType();
+            if (type != STATE_SPACE_SE2 && type != STATE_SPACE_SE3 && type != STATE_SPACE_DUBINS &&
+                type != STATE_SPACE_REEDS_SHEPP && type != STATE_SPACE_UNKNOWN)
+            {
+                throw Exception("PathLengthDirectInfSampler only supports RealVector, SE2, SE3, Dubins, ReedsShepp, "
+                                "and compound combinations of those spaces. Provided compound state space of type: " +
+                                std::to_string(type) + " with " +
+                                std::to_string(space->as<CompoundStateSpace>()->getSubspaceCount()) + " subspaces.");
+            }
+
+            const CompoundStateSpace *compoundSpace = space->as<CompoundStateSpace>();
+            for (unsigned int idx = 0u; idx < compoundSpace->getSubspaceCount(); ++idx)
+            {
+                chain.push_back(idx);
+                collectSpaceLeaves(compoundSpace->getSubspace(idx), chain);
+                chain.pop_back();
+            }
+        }
+
+        const State *PathLengthDirectInfSampler::getSubstate(const State *state, const std::vector<std::size_t> &chain)
+        {
+            for (std::size_t index : chain)
+                state = state->as<CompoundState>()->components[index];
+            return state;
+        }
+
+        State *PathLengthDirectInfSampler::getSubstate(State *state, const std::vector<std::size_t> &chain)
+        {
+            for (std::size_t index : chain)
+                state = state->as<CompoundState>()->components[index];
+            return state;
         }
 
         void PathLengthDirectInfSampler::updatePhsDefinitions(const Cost &maxCost)

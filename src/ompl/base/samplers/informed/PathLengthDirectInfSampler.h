@@ -61,10 +61,12 @@ namespace ompl
            of the size of the planning domain,
             the number of state dimensions, and how close the current solution is to the theoretical minimum.
 
-            Currently only implemented for problems in R^n (i.e., RealVectorStateSpace), SE(2) (i.e., SE2StateSpace),
-           and SE(3) (i.e., SE3StateSpace).
+            Currently implemented for problems in R^n (i.e., RealVectorStateSpace), SE(2), SE(3), Dubins,
+           Reeds-Shepp, and compound combinations of those spaces (including nested compounds such as
+           Compound(SE2, RealVector)). Informed sampling is performed over all RealVector leaf subspaces; SO(2)/SO(3)
+           leaves are sampled uniformly.
             Until an initial solution is found, this sampler simply passes-through to a uniform distribution over the
-           entire state space.
+            entire state space.
 
             @par Associated publication:
 
@@ -127,6 +129,23 @@ namespace ompl
             bool samplePhsRejectBounds(State *statePtr, unsigned int *iters);
 
             // Low level
+            /** \brief A RealVector or SO(2)/SO(3) leaf subspace located by an index chain from the root space. */
+            struct SubspaceLeaf
+            {
+                std::vector<std::size_t> chain;
+                StateSpacePtr space;
+                StateSamplerPtr sampler;  // only used for uninformed (SO2/SO3) leaves
+            };
+
+            /** \brief Recursively collect RealVector (informed) and SO(2)/SO(3) (uninformed) leaf subspaces. */
+            void collectSpaceLeaves(const StateSpacePtr &space, std::vector<std::size_t> &chain);
+
+            /** \brief Follow a subspace index chain to the corresponding (const) substate. */
+            static const State *getSubstate(const State *state, const std::vector<std::size_t> &chain);
+
+            /** \brief Follow a subspace index chain to the corresponding (mutable) substate. */
+            static State *getSubstate(State *state, const std::vector<std::size_t> &chain);
+
             /** \brief Extract the informed subspace from a state pointer */
             std::vector<double> getInformedSubstate(const State *statePtr) const;
 
@@ -163,27 +182,22 @@ namespace ompl
             /** \brief The summed measure of all the start-goal pairs */
             double summedMeasure_;
 
-            /** \brief The index of the subspace of a compound StateSpace for which we can do informed sampling. Unused
-             * if the StateSpace is not compound. */
-            unsigned int informedIdx_;
+            /** \brief RealVector leaf subspaces that participate in informed (PHS) sampling. */
+            std::vector<SubspaceLeaf> informedLeaves_;
 
-            /** \brief The state space of the planning problem that is informed by the heuristics, i.e., in SE(2), R^2*/
+            /** \brief SO(2)/SO(3) leaf subspaces sampled uniformly (uninformed). */
+            std::vector<SubspaceLeaf> uninformedLeaves_;
+
+            /** \brief The Euclidean state space of the informed heuristic, i.e., concatenated RealVector leaves. In
+             * SE(2) this is R^2. */
             StateSpacePtr informedSubSpace_;
 
-            /** \brief The index of the subspace of a compound StateSpace for which we cannot do informed sampling.
-             * Unused if the StateSpace is not compound. */
-            unsigned int uninformedIdx_;
-
-            /** \brief The state space of the planning problem that is \e not informed by the heuristics, i.e., in
-             * SE(2), SO(2)*/
-            StateSpacePtr uninformedSubSpace_;
+            /** \brief Combined measure of all uninformed leaves (1 if there are none). */
+            double uninformedMeasure_{1.0};
 
             /** \brief A regular sampler for the entire statespace for cases where informed sampling cannot be used or
              * is not helpful. I.e., Before a solution is found, or if the solution does not reduce the search space. */
             StateSamplerPtr baseSampler_;
-
-            /** \brief A regular sampler to use on the uninformed subspace. */
-            StateSamplerPtr uninformedSubSampler_;
 
             /** \brief An instance of a random number generator */
             RNG rng_;
