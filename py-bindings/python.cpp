@@ -43,6 +43,7 @@ NB_MODULE(_ompl, m)
     ompl::binding::base::init_OptimizationObjective(base);
     ompl::binding::base::initObjectives_PathLengthOptimizationObjective(base);
     ompl::binding::base::initObjectives_StateCostIntegralObjective(base);
+    ompl::binding::base::initObjectives_PhaseSimilarityObjective(base);
     ompl::binding::base::init_ConstrainedSpaceInformation(base);
 
     ompl::binding::base::initSamplers_UniformValidStateSampler(base);
@@ -53,12 +54,6 @@ NB_MODULE(_ompl, m)
     ompl::binding::base::initSpaces_RealVectorStateProjections(base);
     ompl::binding::base::initSpaces_RealVectorStateSpace(base);
     ompl::binding::base::initSpaces_SE2StateSpace(base);
-    ompl::binding::base::initSpaces_DubinsStateSpace(base);
-    ompl::binding::base::initSpaces_ReedsSheppStateSpace(base);
-    ompl::binding::base::initSpaces_TrochoidStateSpace(base);
-    ompl::binding::base::initSpaces_OwenStateSpace(base);
-    ompl::binding::base::initSpaces_VanaStateSpace(base);
-    ompl::binding::base::initSpaces_VanaOwenStateSpace(base);
     ompl::binding::base::initSpaces_SE3StateSpace(base);
     ompl::binding::base::initSpaces_SO2StateSpace(base);
     ompl::binding::base::initSpaces_SO3StateSpace(base);
@@ -86,7 +81,13 @@ NB_MODULE(_ompl, m)
     ompl::binding::geometric::initPlannersRrt_InformedRRTstar(geometric);
     ompl::binding::geometric::initPlannersRrt_SORRTstar(geometric);
     ompl::binding::geometric::initPlannersRrt_AORRTC(geometric);
+    ompl::binding::geometric::initPlannersRrt_PhaseRRT(geometric);
+    ompl::binding::geometric::initPlannersRrt_PhaseRRTstar(geometric);
     ompl::binding::geometric::initPlannersInformedtrees_BITstar(geometric);
+    ompl::binding::geometric::initPlannersInformedtrees_ABITstar(geometric);
+    ompl::binding::geometric::initPlannersInformedtrees_AITstar(geometric);
+    ompl::binding::geometric::initPlannersInformedtrees_EITstar(geometric);
+    ompl::binding::geometric::initPlannersInformedtrees_EIRMstar(geometric);
     ompl::binding::geometric::initPlannersFmt_FMT(geometric);
     ompl::binding::geometric::initPlannersFmt_BFMT(geometric);
     ompl::binding::geometric::initPlannersKpiece_KPIECE1(geometric);

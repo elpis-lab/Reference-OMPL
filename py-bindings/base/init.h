@@ -11,6 +11,7 @@ namespace ompl::binding::base
     void init_OptimizationObjective(nanobind::module_ &m);
     void initObjectives_PathLengthOptimizationObjective(nanobind::module_ &m);
     void initObjectives_StateCostIntegralObjective(nanobind::module_ &m);
+    void initObjectives_PhaseSimilarityObjective(nanobind::module_ &m);
     void init_Path(nanobind::module_ &m);
     void init_Planner(nanobind::module_ &m);
     void init_PlannerData(nanobind::module_ &m);
