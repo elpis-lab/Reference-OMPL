@@ -3,6 +3,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/function.h>
 #include <nanobind/stl/map.h>
 #include "ompl/base/StateSpace.h"
 #include <sstream>
@@ -64,6 +65,10 @@ void ompl::binding::base::init_StateSpace(nb::module_ &m)
              nb::arg("zero"), nb::arg("eps"), nb::arg("flags"))
         .def("Diagram", &ob::StateSpace::Diagram)
         .def("List", &ob::StateSpace::List)
+        .def("allocDefaultStateSampler", &ob::StateSpace::allocDefaultStateSampler)
+        .def("allocStateSampler", &ob::StateSpace::allocStateSampler)
+        .def("setStateSamplerAllocator", &ob::StateSpace::setStateSamplerAllocator, nb::arg("ssa"))
+        .def("clearStateSamplerAllocator", &ob::StateSpace::clearStateSamplerAllocator)
         .def("allocSubspaceStateSampler",
              nb::overload_cast<const ob::StateSpacePtr &>(&ob::StateSpace::allocSubspaceStateSampler, nb::const_),
              nb::arg("subspace"))
