@@ -5,6 +5,7 @@ author: @shuaiyy
 #ifndef OMPL_BASE_OBJECTIVES_PHASE_SIMILARITY_OBJECTIVE_
 #define OMPL_BASE_OBJECTIVES_PHASE_SIMILARITY_OBJECTIVE_
 
+#include <memory>
 #include <vector>
 
 #include "ompl/base/objectives/StateCostIntegralObjective.h"
@@ -14,7 +15,12 @@ namespace ompl
     namespace base
     {
         /** \brief Similarity-to-demonstration objective for phase-augmented
-            states (q, alpha), alpha being the LAST component of the state.
+            states (q, alpha).
+
+            The canonical layout is an outer CompoundStateSpace containing an
+            arbitrary configuration StateSpace and a one-dimensional
+            RealVectorStateSpace phase. A flattened state with alpha in its
+            last value slot remains supported as a compatibility fallback.
 
             The cost of a state is the deviation from the demonstration at the
             state's own phase: ||q - xi(alpha)||. This is a direct one-to-one
@@ -30,6 +36,11 @@ namespace ompl
         public:
             PhaseSimilarityObjective(const SpaceInformationPtr &si,
                                      bool enableMotionCostInterpolation = false);
+
+            ~PhaseSimilarityObjective() override;
+
+            PhaseSimilarityObjective(const PhaseSimilarityObjective &) = delete;
+            PhaseSimilarityObjective &operator=(const PhaseSimilarityObjective &) = delete;
 
             /** \brief Set the demonstration. Rows are configuration-space
                 poses (no alpha column); row i sits at phase i/(N-1). Must
@@ -51,6 +62,9 @@ namespace ompl
             Cost stateCost(const State *s) const override;
 
         private:
+            /** \brief Release configuration-space states allocated for the reference. */
+            void clearReferenceStates();
+
             /** \brief Piecewise-linear demonstration lookup at phase alpha. */
             std::vector<double> xi(double alpha) const;
 
@@ -65,7 +79,20 @@ namespace ompl
 
             /** \brief True if config dimension j wraps at 2*pi */
             bool isAngular(std::size_t j) const;
-        double alphaScale_{1.0};
+
+            /** \brief Configuration subspace for canonical [configuration, phase] states. */
+            StateSpacePtr configurationSpace_;
+
+            /** \brief Topology-aware representation of reference_ in configurationSpace_. */
+            std::vector<State *> referenceStates_;
+
+            /** \brief Scratch state used to interpolate the canonical reference. */
+            State *interpolatedReference_{nullptr};
+
+            /** \brief True for the canonical outer Compound(configuration, RV(1)) layout. */
+            bool canonicalLayout_{false};
+
+            double alphaScale_{1.0};
         };
     }  // namespace base
 }  // namespace ompl

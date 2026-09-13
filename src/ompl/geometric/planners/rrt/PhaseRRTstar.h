@@ -7,10 +7,10 @@ author: @shuaiyy
 #define OMPL_GEOMETRIC_PLANNERS_RRT_PHASERRTSTAR_
 
 #include "ompl/geometric/planners/PlannerIncludes.h"
+#include "ompl/geometric/planners/rrt/PhaseStateSampler.h"
 #include "ompl/base/OptimizationObjective.h"
 #include "ompl/base/Constraint.h"
 #include "ompl/datastructures/NearestNeighbors.h"
-#include "ompl/base/spaces/RealVectorStateSpace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +20,7 @@ author: @shuaiyy
 #include <deque>
 #include <utility>
 #include <list>
+#include <memory>
 
 namespace ompl
 {
@@ -101,12 +102,7 @@ namespace ompl
                 config values only (no alpha column). Row i gets alpha = i/(N-1). */
             void setReference(const std::vector<std::vector<double>> &waypoints)
             {
-                if (waypoints.size() < 2)
-                    throw Exception("PhaseRRTstar needs at least 2 reference waypoints");
-                for (const auto &w : waypoints)
-                    if (w.size() != waypoints.front().size())
-                        throw Exception("PhaseRRTstar reference rows have inconsistent sizes");
-                reference_ = waypoints;
+                phaseSampler_->setReference(waypoints);
             }
 
             /** \brief Indices of the config dimensions that wrap at 2*pi, so that
@@ -114,12 +110,12 @@ namespace ompl
                 means no wrapping. */
             void setAngularDims(const std::vector<unsigned int> &dims)
             {
-                angularDims_ = dims;
+                phaseSampler_->setAngularDims(dims);
             }
 
             const std::vector<unsigned int> &getAngularDims() const
             {
-                return angularDims_;
+                return phaseSampler_->getAngularDims();
             }
 
             /** \brief Minimum phase advance per edge (> 0: forbids stalling) */
@@ -131,8 +127,8 @@ namespace ompl
             double getDAlphaMax() const { return dAlphaMax_; }
 
             /** \brief Std-dev of the sampling noise around xi(alpha) */
-            void setSampleSigma(double s) { sampleSigma_ = s; }
-            double getSampleSigma() const { return sampleSigma_; }
+            void setSampleSigma(double s) { phaseSampler_->setSampleSigma(s); }
+            double getSampleSigma() const { return phaseSampler_->getSampleSigma(); }
 
             /** \brief Flat-alpha mode for constrained planning: alpha lives in
                 the last value slot of a flat (or wrapped) real-vector state,
@@ -140,8 +136,7 @@ namespace ompl
                 setup would have used for the alpha subspace. */
             void setFlatAlpha(double scale)
             {
-                flatAlpha_ = true;
-                alphaScale_ = scale;
+                phaseSampler_->setFlatAlpha(scale);
             }
 
             /** \brief Project phase-door samples onto a constraint manifold, so
@@ -149,21 +144,21 @@ namespace ompl
                 the alpha slot free (zero Jacobian column). */
             void setProjectionConstraint(const base::ConstraintPtr &c)
             {
-                projection_ = c;
+                phaseSampler_->setProjectionConstraint(c);
             }
 
             /** \brief Levels per unit of phase: alpha is snapped to a 1/phaseGrid
                 grid wherever it is written. A d_alpha_min below 1/phaseGrid rounds
                 back to a stall. */
-            void setPhaseGrid(double levels) { phaseGrid_ = levels; }
-            double getPhaseGrid() const { return phaseGrid_; }
+            void setPhaseGrid(double levels) { phaseSampler_->setPhaseGrid(levels); }
+            double getPhaseGrid() const { return phaseSampler_->getPhaseGrid(); }
 
             /** \brief Per-dimension multipliers on sample_sigma, one per config
                 dimension (alpha excluded): the noise on value i is
                 Gaussian(0, sample_sigma * w[i]). Dimensions in different units,
                 map units and radians, cannot share one sigma. Empty = all 1.0. */
-            void setSampleWeights(const std::vector<double> &w) { sampleWeights_ = w; }
-            const std::vector<double> &getSampleWeights() const { return sampleWeights_; }
+            void setSampleWeights(const std::vector<double> &w) { phaseSampler_->setSampleWeights(w); }
+            const std::vector<double> &getSampleWeights() const { return phaseSampler_->getSampleWeights(); }
 
             /** \brief Fraction of samples drawn uniformly instead of near the demo */
             void setUniformFraction(double b) { uniformFraction_ = b; }
@@ -469,99 +464,16 @@ namespace ompl
             /** \brief Calculate the k_RRG* and r_RRG* terms */
             void calculateRewiringLowerBounds();
 
-            /** \brief State sampler */
-            /** \brief The demonstration: reference_[i] = config at alpha = i/(N-1) */
-            std::vector<std::vector<double>> reference_;
-            /** \brief Config dimensions that wrap at 2*pi (see setAngularDims) */
-            std::vector<unsigned int> angularDims_;
-
-            /** \brief Shortest signed step from angle a to angle b, in (-pi, pi] */
-            static double angleDiff(double a, double b)
-            {
-                const double d = b - a;
-                return std::atan2(std::sin(d), std::cos(d));
-            }
-
-            /** \brief True if config dimension j wraps at 2*pi */
-            bool isAngular(std::size_t j) const
-            {
-                return std::find(angularDims_.begin(), angularDims_.end(), static_cast<unsigned int>(j)) !=
-                       angularDims_.end();
-            }
-
-
-            /** \brief Demo pose at progress alpha in [0,1], linear blend of the
-                two surrounding waypoints. */
-            std::vector<double> xi(double alpha) const
-            {
-                alpha = std::max(0.0, std::min(1.0, alpha));
-                const double position = alpha * (reference_.size() - 1);
-                const auto low = static_cast<std::size_t>(position);
-                const auto high = std::min(low + 1, reference_.size() - 1);
-                const double f = position - static_cast<double>(low);
-                std::vector<double> out(reference_[low].size());
-                for (std::size_t j = 0; j < out.size(); ++j)
-                    out[j] = isAngular(j) ?
-                                 reference_[low][j] + f * angleDiff(reference_[low][j], reference_[high][j]) :
-                                 (1.0 - f) * reference_[low][j] + f * reference_[high][j];
-                return out;
-            }
-
-            /** \brief Read alpha from a state.
-
-                Default (compound) mode: the space is [config, RealVector(1)].
-                Flat mode (setFlatAlpha): the space is any real-vector-like
-                space whose LAST value slot stores alpha * alphaScale_, the
-                layout constrained planning needs, since OMPL's
-                ConstrainedStateSpace only wraps RealVectorStateSpace and the
-                scale substitutes for the compound subspace weight. */
-            double getAlpha(const base::State *state) const
-            {
-                if (flatAlpha_)
-                    return *si_->getStateSpace()->getValueAddressAtIndex(
-                               const_cast<base::State *>(state), alphaIndex_) /
-                           alphaScale_;
-                return state->as<base::CompoundState>()
-                    ->as<base::RealVectorStateSpace::StateType>(1)
-                    ->values[0];
-            }
-
-            /** \brief Write alpha into a state (mirror of getAlpha). */
-            void setAlpha(base::State *state, double alpha) const
-            {
-                if (flatAlpha_)
-                {
-                    *si_->getStateSpace()->getValueAddressAtIndex(
-                        state, alphaIndex_) = alpha * alphaScale_;
-                    return;
-                }
-                state->as<base::CompoundState>()
-                    ->as<base::RealVectorStateSpace::StateType>(1)
-                    ->values[0] = alpha;
-            }
-
             /** \brief Per-edge phase advance bounds */
             double dAlphaMin_{0.005};
             double dAlphaMax_{0.05};
 
-            /** \brief Sampling: noise around xi(alpha), and the uniform fraction */
-            double sampleSigma_{0.1};
-
-            /** \brief Per-dimension multipliers on sampleSigma_; empty = all 1.0 */
-            std::vector<double> sampleWeights_;
-
-            /** \brief Levels per unit phase; 100 = the 0.01 grid */
-            double phaseGrid_{100.0};
-
-            /** \brief Flat-alpha mode (constrained planning), see setFlatAlpha */
-            bool flatAlpha_{false};
-            double alphaScale_{1.0};
-            unsigned int alphaIndex_{0u};
-
-            /** \brief Optional sample projection, see setProjectionConstraint */
-            base::ConstraintPtr projection_;
             double uniformFraction_{0.1};
 
+            /** \brief The sole owner of the demonstration and phase-biased sampling state. */
+            std::unique_ptr<PhaseStateSampler> phaseSampler_;
+
+            /** \brief General uniform sampler used for the uniform fraction. */
             base::StateSamplerPtr sampler_;
 
             /** \brief An informed sampler */

@@ -8,11 +8,40 @@ author: @shuaiyy
 #include <cmath>
 #include <stdexcept>
 
+#include "ompl/base/spaces/RealVectorStateSpace.h"
+
 ompl::base::PhaseSimilarityObjective::PhaseSimilarityObjective(const SpaceInformationPtr &si,
                                                                bool enableMotionCostInterpolation)
   : StateCostIntegralObjective(si, enableMotionCostInterpolation)
 {
     description_ = "Phase Similarity";
+
+    const auto *compound = dynamic_cast<const CompoundStateSpace *>(si_->getStateSpace().get());
+    if (compound != nullptr && compound->getSubspaceCount() == 2)
+    {
+        const auto *phase = dynamic_cast<const RealVectorStateSpace *>(compound->getSubspace(1).get());
+        if (phase != nullptr && phase->getDimension() == 1)
+        {
+            canonicalLayout_ = true;
+            configurationSpace_ = compound->getSubspace(0);
+            interpolatedReference_ = configurationSpace_->allocState();
+        }
+    }
+}
+
+ompl::base::PhaseSimilarityObjective::~PhaseSimilarityObjective()
+{
+    clearReferenceStates();
+    if (interpolatedReference_ != nullptr)
+        configurationSpace_->freeState(interpolatedReference_);
+}
+
+void ompl::base::PhaseSimilarityObjective::clearReferenceStates()
+{
+    if (configurationSpace_)
+        for (auto *state : referenceStates_)
+            configurationSpace_->freeState(state);
+    referenceStates_.clear();
 }
 
 void ompl::base::PhaseSimilarityObjective::setReference(const std::vector<std::vector<double>> &waypoints)
@@ -30,7 +59,35 @@ void ompl::base::PhaseSimilarityObjective::setReference(const std::vector<std::v
             throw std::invalid_argument("PhaseSimilarityObjective: angular dimension index is outside "
                                         "the reference width");
 
+    const unsigned int expectedDimension =
+        canonicalLayout_ ? configurationSpace_->getDimension() : si_->getStateDimension() - 1;
+    if (dim != expectedDimension)
+        throw std::invalid_argument("PhaseSimilarityObjective: reference width does not match the configuration "
+                                    "space dimension");
+
+    clearReferenceStates();
     reference_ = waypoints;
+
+    if (canonicalLayout_)
+    {
+        configurationSpace_->setup();
+        try
+        {
+            for (const auto &waypoint : reference_)
+            {
+                State *state = configurationSpace_->allocState();
+                referenceStates_.push_back(state);
+                configurationSpace_->copyFromReals(state, waypoint);
+                configurationSpace_->enforceBounds(state);
+            }
+        }
+        catch (...)
+        {
+            clearReferenceStates();
+            reference_.clear();
+            throw;
+        }
+    }
 }
 
 void ompl::base::PhaseSimilarityObjective::setAngularDims(const std::vector<unsigned int> &dims)
@@ -76,10 +133,23 @@ ompl::base::Cost ompl::base::PhaseSimilarityObjective::stateCost(const State *s)
     if (reference_.size() < 2)
         throw std::runtime_error("PhaseSimilarityObjective: no reference set. Call setReference() first.");
 
+    if (canonicalLayout_)
+    {
+        const auto *compound = s->as<CompoundState>();
+        const double alpha = compound->as<RealVectorStateSpace::StateType>(1)->values[0];
+        const double clampedAlpha = std::min(std::max(alpha, 0.0), 1.0);
+        const double position = clampedAlpha * static_cast<double>(referenceStates_.size() - 1);
+        const auto low = static_cast<std::size_t>(position);
+        const auto high = std::min(low + 1, referenceStates_.size() - 1);
+        configurationSpace_->interpolate(referenceStates_[low], referenceStates_[high],
+                                         position - static_cast<double>(low), interpolatedReference_);
+        return Cost(configurationSpace_->distance(compound->components[0], interpolatedReference_));
+    }
+
     std::vector<double> values;
     si_->getStateSpace()->copyToReals(values, s);
 
-    // the state is (q, alpha) with alpha as the last value
+    // Legacy flat-alpha fallback: preserve flattened angular handling and alpha scaling.
     if (values.size() != reference_.front().size() + 1)
         throw std::runtime_error("PhaseSimilarityObjective: state dimension does not match "
                                  "reference width + 1 (config + alpha)");

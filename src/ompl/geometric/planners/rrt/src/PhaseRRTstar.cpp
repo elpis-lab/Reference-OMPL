@@ -16,10 +16,12 @@ author: @shuaiyy
 #include "ompl/base/samplers/InformedStateSampler.h"
 #include "ompl/base/samplers/informed/RejectionInfSampler.h"
 #include "ompl/base/samplers/informed/OrderedInfSampler.h"
+#include "ompl/base/StateSpace.h"
 #include "ompl/tools/config/SelfConfig.h"
 #include "ompl/util/GeometricEquations.h"
 
-ompl::geometric::PhaseRRTstar::PhaseRRTstar(const base::SpaceInformationPtr &si) : base::Planner(si, "PhaseRRTstar")
+ompl::geometric::PhaseRRTstar::PhaseRRTstar(const base::SpaceInformationPtr &si)
+  : base::Planner(si, "PhaseRRTstar"), phaseSampler_(std::make_unique<PhaseStateSampler>(si->getStateSpace()))
 {
     specs_.approximateSolutions = true;
     specs_.optimizingPaths = true;
@@ -71,28 +73,12 @@ ompl::geometric::PhaseRRTstar::~PhaseRRTstar()
 void ompl::geometric::PhaseRRTstar::setup()
 {
     Planner::setup();
-    if (flatAlpha_)
-        alphaIndex_ = si_->getStateSpace()->getDimension() - 1;
     tools::SelfConfig sc(si_, getName());
     sc.configurePlannerRange(maxDistance_);
     if (!si_->getStateSpace()->hasSymmetricDistance() || !si_->getStateSpace()->hasSymmetricInterpolate())
     {
         OMPL_WARN("%s requires a state space with symmetric distance and symmetric interpolation.", getName().c_str());
     }
-
-    /* one weight per config dimension, or the sampler reads past the end */
-    if (!sampleWeights_.empty() && !reference_.empty() &&
-        sampleWeights_.size() != reference_.front().size())
-        throw Exception("PhaseRRTstar: setSampleWeights() size (" + std::to_string(sampleWeights_.size()) +
-                        ") must equal the reference width (" + std::to_string(reference_.front().size()) + ")");
-
-    /* angular slots index a reference row, so they must fit inside one */
-    if (!angularDims_.empty() && !reference_.empty())
-        for (const auto d : angularDims_)
-            if (d >= reference_.front().size())
-                throw Exception("PhaseRRTstar: setAngularDims() index " + std::to_string(d) +
-                                " is outside the reference width (" +
-                                std::to_string(reference_.front().size()) + ")");
 
     if (!nn_)
         nn_.reset(tools::SelfConfig::getDefaultNearestNeighbors<Motion *>(this));
@@ -160,7 +146,7 @@ ompl::base::PlannerStatus ompl::geometric::PhaseRRTstar::solve(const base::Plann
     checkValidity();
 
     // the sampler reads xi(alpha), so a demonstration is mandatory
-    if (reference_.size() < 2)
+    if (phaseSampler_->referenceSize() < 2)
     {
         OMPL_ERROR("%s: no reference set. Call setReference() before solve().",
                    getName().c_str());
@@ -169,12 +155,12 @@ ompl::base::PlannerStatus ompl::geometric::PhaseRRTstar::solve(const base::Plann
 
     // a demo row plus alpha must fill the state exactly, or copyFromReals
     // would write past the end
-    if (reference_.front().size() + 1 != si_->getStateDimension())
+    if (!phaseSampler_->hasCompatibleLayout() ||
+        phaseSampler_->referenceDimension() + 1 != si_->getStateDimension())
     {
-        OMPL_ERROR("%s: reference has %u values per row but the state space "
-                   "expects %u (config + 1 alpha).",
-                   getName().c_str(), (unsigned int)reference_.front().size(),
-                   (unsigned int)si_->getStateDimension());
+        OMPL_ERROR("%s: incompatible state layout or reference width; expected "
+                   "Compound(configuration, RealVector(1)) or explicit flat-alpha mode.",
+                   getName().c_str());
         return base::PlannerStatus::ABORT;
     }
 
@@ -277,30 +263,7 @@ ompl::base::PlannerStatus ompl::geometric::PhaseRRTstar::solve(const base::Plann
         }
         else
         {
-            /* phase-conditioned sampling: draw a phase on the grid first, then
-               a configuration near what the demonstration does at that phase */
-            const double alpha = std::round(rng_.uniform01() * phaseGrid_) / phaseGrid_;
-            std::vector<double> values = xi(alpha);
-
-            /* scatter around the reference pose, each dimension scaled by its
-               own weight (empty = all 1.0) */
-            for (std::size_t i = 0; i < values.size(); ++i)
-            {
-                const double w = sampleWeights_.empty() ? 1.0 : sampleWeights_[i];
-                values[i] += rng_.gaussian(0.0, sampleSigma_ * w);
-            }
-
-            /* keep the phase this sample was drawn at: q alone cannot say which
-               branch of a self-intersecting reference it belongs to */
-            values.push_back(flatAlpha_ ? alpha * alphaScale_ : alpha);
-            si_->getStateSpace()->copyFromReals(rstate, values);
-
-            /* noise may leave the bounds; pull the state back in */
-            si_->getStateSpace()->enforceBounds(rstate);
-
-            /* extensions toward off-manifold targets collapse, so project */
-            if (projection_)
-                projection_->project(rstate);
+            phaseSampler_->sampleUniform(rstate);
         }
 
         // find closest state in the tree
@@ -323,10 +286,11 @@ ompl::base::PlannerStatus ompl::geometric::PhaseRRTstar::solve(const base::Plann
            [nearest + dAlphaMin_, nearest + dAlphaMax_], cap it at 1, then snap to
            the grid, which also regularises the arbitrary phase of a uniform
            sample. dAlphaMin_ below one grid step rounds back to a stall. */
-        const double alphaNear = getAlpha(nmotion->state);
-        double alphaNew = std::min(getAlpha(dstate), alphaNear + dAlphaMax_);
+        const double alphaNear = phaseSampler_->getAlpha(nmotion->state);
+        double alphaNew = std::min(phaseSampler_->getAlpha(dstate), alphaNear + dAlphaMax_);
         alphaNew = std::max(alphaNew, alphaNear + dAlphaMin_);
-        setAlpha(dstate, std::round(std::min(alphaNew, 1.0) * phaseGrid_) / phaseGrid_);
+        const double phaseGrid = phaseSampler_->getPhaseGrid();
+        phaseSampler_->setAlpha(dstate, std::round(std::min(alphaNew, 1.0) * phaseGrid) / phaseGrid);
 
         // Check if the motion between the nearest state and the state to add is valid
         if (si_->checkMotion(nmotion->state, dstate))
@@ -346,17 +310,17 @@ ompl::base::PlannerStatus ompl::geometric::PhaseRRTstar::solve(const base::Plann
 
             /* one neighbor set, two opposite phase directions: earlier nodes may
                parent the new motion, later ones may be rewired through it */
-            const double alphaMotion = getAlpha(motion->state);
+            const double alphaMotion = phaseSampler_->getAlpha(motion->state);
             /* grid phases carry float dust, so compare with a tolerance */
             constexpr double alphaEps = 1e-9;
             auto parentOK = [&](const Motion *p)
             {
-                const double da = alphaMotion - getAlpha(p->state);
+                const double da = alphaMotion - phaseSampler_->getAlpha(p->state);
                 return da >= dAlphaMin_ - alphaEps && da <= dAlphaMax_ + alphaEps;  // dAlphaMin <= alpha_new - alpha_parent <= dAlphaMax
             };
             auto rewireOK = [&](const Motion *c)
             {
-                const double da = getAlpha(c->state) - alphaMotion;
+                const double da = phaseSampler_->getAlpha(c->state) - alphaMotion;
                 return da >= dAlphaMin_ - alphaEps && da <= dAlphaMax_ + alphaEps;  // dAlphaMin <= alpha_child - alpha_new <= dAlphaMax
             };
 
