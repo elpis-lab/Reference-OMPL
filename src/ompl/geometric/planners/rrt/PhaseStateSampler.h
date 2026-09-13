@@ -40,6 +40,7 @@
 #include "ompl/base/StateSpace.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace ompl
@@ -59,11 +60,6 @@ namespace ompl
             ~PhaseStateSampler() override;
 
             void setReference(const std::vector<std::vector<double>> &waypoints);
-            void setAngularDims(const std::vector<unsigned int> &dims);
-            const std::vector<unsigned int> &getAngularDims() const
-            {
-                return angularDims_;
-            }
 
             void setSampleSigma(double sigma)
             {
@@ -117,11 +113,13 @@ namespace ompl
             }
             bool hasCompatibleLayout() const;
 
+            /** \brief Empty if the space is Compound(configuration, RealVector(1)
+                phase) or flat-alpha is enabled; otherwise a human-readable error. */
+            std::string diagnoseLayout() const;
+
         private:
             void clearReferenceStates();
             std::vector<double> flatReferenceAt(double alpha) const;
-            bool isAngular(std::size_t index) const;
-            static double angleDiff(double from, double to);
             void projectIfNeeded(base::State *state) const;
 
             base::StateSpacePtr stateSpace_;
@@ -131,7 +129,6 @@ namespace ompl
             std::vector<std::vector<double>> reference_;
             std::vector<base::State *> referenceStates_;
             base::State *interpolatedConfiguration_{nullptr};
-            std::vector<unsigned int> angularDims_;
             std::vector<double> sampleWeights_;
             base::ConstraintPtr projection_;
             double sampleSigma_{0.1};

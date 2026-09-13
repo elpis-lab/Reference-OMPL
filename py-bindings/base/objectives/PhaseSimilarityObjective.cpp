@@ -15,6 +15,5 @@ void ompl::binding::base::initObjectives_PhaseSimilarityObjective(nb::module_ &m
         .def(nb::init<const ob::SpaceInformationPtr &, bool>(), nb::arg("si"),
              nb::arg("enableMotionCostInterpolation") = false)
         .def("setAlphaScale", &ob::PhaseSimilarityObjective::setAlphaScale, nb::arg("s"))
-        .def("setReference", &ob::PhaseSimilarityObjective::setReference, nb::arg("waypoints"))
-        .def("setAngularDims", &ob::PhaseSimilarityObjective::setAngularDims, nb::arg("dims"));
+        .def("setReference", &ob::PhaseSimilarityObjective::setReference, nb::arg("waypoints"));
 }

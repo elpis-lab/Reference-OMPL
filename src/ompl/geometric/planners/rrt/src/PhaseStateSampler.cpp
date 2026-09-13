@@ -7,8 +7,8 @@ author: @shuaiyy
 #include "ompl/base/spaces/RealVectorStateSpace.h"
 #include "ompl/util/Exception.h"
 
-#include <algorithm>
 #include <cmath>
+#include <string>
 
 ompl::geometric::PhaseStateSampler::PhaseStateSampler(const base::StateSpacePtr &space)
   : base::StateSampler(space.get()), stateSpace_(space)
@@ -44,18 +44,6 @@ void ompl::geometric::PhaseStateSampler::clearReferenceStates()
     referenceStates_.clear();
 }
 
-double ompl::geometric::PhaseStateSampler::angleDiff(double from, double to)
-{
-    const double difference = to - from;
-    return std::atan2(std::sin(difference), std::cos(difference));
-}
-
-bool ompl::geometric::PhaseStateSampler::isAngular(std::size_t index) const
-{
-    return std::find(angularDims_.begin(), angularDims_.end(), static_cast<unsigned int>(index)) !=
-           angularDims_.end();
-}
-
 void ompl::geometric::PhaseStateSampler::setReference(const std::vector<std::vector<double>> &waypoints)
 {
     if (waypoints.size() < 2)
@@ -69,9 +57,6 @@ void ompl::geometric::PhaseStateSampler::setReference(const std::vector<std::vec
         canonicalLayout_ && !flatAlpha_ ? configurationSpace_->getDimension() : stateSpace_->getDimension() - 1;
     if (dimension != expectedDimension)
         throw Exception("PhaseStateSampler reference width does not match the configuration space dimension");
-    for (const auto index : angularDims_)
-        if (index >= dimension)
-            throw Exception("PhaseStateSampler angular dimension index is outside the reference width");
     if (!sampleWeights_.empty() && sampleWeights_.size() != dimension)
         throw Exception("PhaseStateSampler sample weight count must match the reference width");
 
@@ -99,15 +84,6 @@ void ompl::geometric::PhaseStateSampler::setReference(const std::vector<std::vec
     }
 }
 
-void ompl::geometric::PhaseStateSampler::setAngularDims(const std::vector<unsigned int> &dims)
-{
-    if (!reference_.empty())
-        for (const auto index : dims)
-            if (index >= reference_.front().size())
-                throw Exception("PhaseStateSampler angular dimension index is outside the reference width");
-    angularDims_ = dims;
-}
-
 void ompl::geometric::PhaseStateSampler::setSampleWeights(const std::vector<double> &weights)
 {
     if (!reference_.empty() && !weights.empty() && weights.size() != reference_.front().size())
@@ -130,6 +106,31 @@ bool ompl::geometric::PhaseStateSampler::hasCompatibleLayout() const
     return (canonicalLayout_ && !flatAlpha_) || flatAlpha_;
 }
 
+std::string ompl::geometric::PhaseStateSampler::diagnoseLayout() const
+{
+    if (flatAlpha_)
+        return {};
+    if (canonicalLayout_)
+        return {};
+
+    const auto *compound = dynamic_cast<const base::CompoundStateSpace *>(stateSpace_.get());
+    if (compound == nullptr)
+        return "state space is not a CompoundStateSpace; wrap the configuration as "
+               "Compound(configuration, RealVectorStateSpace(1) phase)";
+    if (compound->getSubspaceCount() < 2)
+        return "compound space must have a configuration subspace plus a 1-D phase subspace";
+
+    const unsigned int last = compound->getSubspaceCount() - 1;
+    const auto *phase = dynamic_cast<const base::RealVectorStateSpace *>(compound->getSubspace(last).get());
+    if (phase == nullptr)
+        return "last subspace must be RealVectorStateSpace(1) for the phase / alpha";
+    if (phase->getDimension() != 1)
+        return "last subspace (phase / alpha) must be 1-dimensional";
+    if (compound->getSubspaceCount() != 2)
+        return "expected exactly two top-level subspaces: [configuration, RealVector(1) phase]";
+    return "state space is not a valid phase-augmented layout";
+}
+
 std::vector<double> ompl::geometric::PhaseStateSampler::flatReferenceAt(double alpha) const
 {
     alpha = std::max(0.0, std::min(1.0, alpha));
@@ -140,9 +141,7 @@ std::vector<double> ompl::geometric::PhaseStateSampler::flatReferenceAt(double a
     std::vector<double> values(reference_[low].size());
     for (std::size_t index = 0; index < values.size(); ++index)
         values[index] =
-            isAngular(index) ?
-                reference_[low][index] + fraction * angleDiff(reference_[low][index], reference_[high][index]) :
-                (1.0 - fraction) * reference_[low][index] + fraction * reference_[high][index];
+            (1.0 - fraction) * reference_[low][index] + fraction * reference_[high][index];
     return values;
 }
 

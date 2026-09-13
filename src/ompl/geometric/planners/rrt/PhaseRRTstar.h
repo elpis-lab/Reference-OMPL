@@ -105,19 +105,6 @@ namespace ompl
                 phaseSampler_->setReference(waypoints);
             }
 
-            /** \brief Indices of the config dimensions that wrap at 2*pi, so that
-                xi() interpolates them along the short arc. Empty (the default)
-                means no wrapping. */
-            void setAngularDims(const std::vector<unsigned int> &dims)
-            {
-                phaseSampler_->setAngularDims(dims);
-            }
-
-            const std::vector<unsigned int> &getAngularDims() const
-            {
-                return phaseSampler_->getAngularDims();
-            }
-
             /** \brief Minimum phase advance per edge (> 0: forbids stalling) */
             void setDAlphaMin(double d) { dAlphaMin_ = d; }
             double getDAlphaMin() const { return dAlphaMin_; }

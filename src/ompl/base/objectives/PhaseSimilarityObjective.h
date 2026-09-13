@@ -47,15 +47,9 @@ namespace ompl
                 match the reference given to the planner. */
             void setReference(const std::vector<std::vector<double>> &waypoints);
 
-            /** \brief Indices of the config dimensions that wrap at 2*pi, so that
-                both xi() and the deviation take the short way round the circle.
-                Must match the planner's setAngularDims(). Empty (the default)
-                means no wrapping. */
-            void setAngularDims(const std::vector<unsigned int> &dims);
-
-        /** \brief The state's last value stores alpha * scale (flat-alpha
-            constrained layout); default 1.0 = plain alpha. */
-        void setAlphaScale(double s) { alphaScale_ = s; }
+            /** \brief The state's last value stores alpha * scale (flat-alpha
+                constrained layout); default 1.0 = plain alpha. */
+            void setAlphaScale(double s) { alphaScale_ = s; }
 
             /** \brief Deviation of the state from the demonstration at the
                 state's own phase: ||q - xi(alpha)||. */
@@ -70,15 +64,6 @@ namespace ompl
 
             /** \brief Demonstration waypoints; row i sits at phase i/(N-1). */
             std::vector<std::vector<double>> reference_;
-
-            /** \brief Config dimensions that wrap at 2*pi (see setAngularDims) */
-            std::vector<unsigned int> angularDims_;
-
-            /** \brief Shortest signed step from angle a to angle b, in (-pi, pi] */
-            static double angleDiff(double a, double b);
-
-            /** \brief True if config dimension j wraps at 2*pi */
-            bool isAngular(std::size_t j) const;
 
             /** \brief Configuration subspace for canonical [configuration, phase] states. */
             StateSpacePtr configurationSpace_;

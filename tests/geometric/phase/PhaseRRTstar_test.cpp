@@ -10,6 +10,7 @@
 #include "ompl/geometric/SimpleSetup.h"
 #include "ompl/geometric/planners/rrt/PhaseRRTstar.h"
 #include "ompl/geometric/planners/rrt/PhaseStateSampler.h"
+#include "ompl/util/Exception.h"
 
 #include <cmath>
 #include <memory>
@@ -149,4 +150,21 @@ BOOST_AUTO_TEST_CASE(ShortCanonicalSolve)
     const ob::PlannerStatus status = setup.solve(ob::IterationTerminationCondition(500));
     BOOST_CHECK(status);
     BOOST_CHECK(setup.haveExactSolutionPath());
+}
+
+BOOST_AUTO_TEST_CASE(RejectsStateSpaceWithoutPhaseSubspace)
+{
+    auto space = std::make_shared<ob::RealVectorStateSpace>(3);
+    ob::RealVectorBounds bounds(3);
+    bounds.setLow(-1.0);
+    bounds.setHigh(1.0);
+    space->setBounds(bounds);
+    auto si = std::make_shared<ob::SpaceInformation>(space);
+    si->setup();
+
+    og::PhaseRRTstar planner(si);
+    BOOST_CHECK_THROW(planner.setup(), ompl::Exception);
+
+    og::PhaseStateSampler sampler(space);
+    BOOST_CHECK(!sampler.diagnoseLayout().empty());
 }
