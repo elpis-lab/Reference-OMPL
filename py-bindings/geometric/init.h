@@ -10,7 +10,6 @@ namespace ompl::binding::geometric
     void initPlannersRrt_InformedRRTstar(nanobind::module_ &m);
     void initPlannersRrt_SORRTstar(nanobind::module_ &m);
     void initPlannersRrt_AORRTC(nanobind::module_ &m);
-    void initPlannersRrt_PhaseRRT(nanobind::module_ &m);
     void initPlannersRrt_PhaseRRTstar(nanobind::module_ &m);
     void initPlannersRrt_STRRTstar(nanobind::module_ &m);
     void initPlannersInformedtrees_BITstar(nanobind::module_ &m);
