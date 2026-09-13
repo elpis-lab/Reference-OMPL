@@ -8,6 +8,7 @@ author: @shuaiyy
 #include <boost/math/constants/constants.hpp>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <vector>
 #include "ompl/base/Goal.h"
 #include "ompl/base/goals/GoalSampleableRegion.h"
@@ -18,6 +19,7 @@ author: @shuaiyy
 #include "ompl/base/samplers/informed/OrderedInfSampler.h"
 #include "ompl/base/StateSpace.h"
 #include "ompl/tools/config/SelfConfig.h"
+#include "ompl/util/Exception.h"
 #include "ompl/util/GeometricEquations.h"
 
 ompl::geometric::PhaseRRTstar::PhaseRRTstar(const base::SpaceInformationPtr &si)
@@ -72,6 +74,18 @@ ompl::geometric::PhaseRRTstar::~PhaseRRTstar()
 
 void ompl::geometric::PhaseRRTstar::setup()
 {
+    // TODO
+    // Check if the state space is set up properly as:
+    // a compound state space with a RealVector(1) state as alpha phase dimension
+    // A better idea is to implement a customized state space class for users, 
+    // which is a compound state space with any provided StateSpace and a RealVector(1) state
+    const std::string layoutError = phaseSampler_->diagnoseLayout();
+    if (!layoutError.empty())
+    {
+        setup_ = false;
+        throw Exception(getName() + ": " + layoutError);
+    }
+
     Planner::setup();
     tools::SelfConfig sc(si_, getName());
     sc.configurePlannerRange(maxDistance_);
